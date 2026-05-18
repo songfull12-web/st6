@@ -1,81 +1,72 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 
-# 1. 페이지 설정 (넓은 화면 모드)
-st.set_page_config(page_title="Personal Stock Analyzer", layout="wide")
-
-# 2. 고퀄리티 디자인을 위한 커스텀 CSS (이미지 느낌 재현)
+# 1. 디자인 설정
+st.set_page_config(page_title="Global CANSLIM Scanner", layout="wide")
 st.markdown("""
     <style>
-    .main { background-color: #0f172a; color: white; }
-    .stMetric { background-color: #1e293b; padding: 20px; border-radius: 15px; border: 1px solid #334155; }
-    [data-testid="stMetricValue"] { color: #facc15 !important; font-weight: 800; }
-    .card { background-color: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; height: 100%; }
-    .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; }
-    .positive { background-color: #065f46; color: #34d399; }
-    .negative { background-color: #7f1d1d; color: #f87171; }
+    .main { background-color: #0a0e14; color: #e2e8f0; }
+    .stMetric { background-color: #111722; padding: 15px; border-radius: 10px; border: 1px solid #1e2d44; }
+    .score-box { text-align:center; padding:15px; border-radius:12px; background-color:#1a2233; border: 1px solid #00d4ff; }
     </style>
     """, unsafe_allow_html=True)
 
-# 3. 사이드바 - 파일 업로드 및 보안
-with st.sidebar:
-    st.title("🔒 Private Access")
-    uploaded_file = st.file_uploader("분석 엑셀 업로드", type=['xlsx', 'csv'])
-    st.info("GitHub 저장소가 Private이면 이 화면은 본인만 볼 수 있습니다.")
+st.title("🚀 실시간 글로벌 주식 분석기")
+st.write("엑셀 업로드 없이, 티커나 종목번호만 입력하면 즉시 분석합니다.")
 
-# 4. 메인 대시보드 상단 (종목명 및 요약)
-if uploaded_file:
-    df = pd.read_excel(uploaded_file)
+# 2. 검색창 (여기에서 검색하면 바로 나옵니다)
+search_input = st.text_input("종목 검색 (예: NVDA, 005930)", "NVDA").strip()
+
+def get_analysis(symbol):
+    if symbol.isdigit() and len(symbol) == 6:
+        target = f"{symbol}.KS"
+    else:
+        target = symbol.upper()
     
-    st.title("🛰️ Satellogic Inc. (SATL)")
-    st.caption("Last Updated: 2026-05-18 | 분석 기준: 퀀트 및 CAN SLIM 전략")
+    try:
+        ticker = yf.Ticker(target)
+        info = ticker.info
+        if not info or 'regularMarketPrice' not in info:
+            if target.endswith('.KS'):
+                target = target.replace('.KS', '.KQ')
+                ticker = yf.Ticker(target)
+                info = ticker.info
+        
+        hist = ticker.history(period="1y")
+        if hist.empty: return None
 
-    # 요약 지표 (이미지 상단 3개 지표)
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("종합 점수", "53점", "상위 12%")
-    with col2:
-        st.metric("Conviction", "관망/보류", "Hold")
-    with col3:
-        st.metric("현재가", "$ 9.84", "+13.89%")
-    with col4:
-        st.metric("RS 등급", "99", "신고가 근접")
+        # 주요 지표 추출
+        price = info.get('regularMarketPrice', hist['Close'].iloc[-1])
+        eps_g = info.get('earningsQuarterlyGrowth', 0) * 100
+        roe = info.get('returnOnEquity', 0) * 100
+        rs = ((hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100
+        high_52w = hist['High'].max()
+        near_high = (price / high_52w) * 100
+        
+        # 점수 계산 (100점 만점)
+        score = round((min(eps_g, 30)*0.8) + (min(roe, 20)*0.8) + (min(rs, 30)*0.8) + (near_high*0.2), 1)
 
-    st.divider()
+        return {"name": info.get('shortName', target), "price": price, "score": score, "eps": eps_g, "roe": roe, "rs": rs, "high": near_high}
+    except: return None
 
-    # 5. CAN SLIM 분석 섹션 (이미지의 격자형 레이아웃)
-    st.subheader("📊 CAN SLIM 체크리스트")
-    c_cols = st.columns(4)
-    can_slim_data = [
-        ("C", "Current Earnings", "15.0", "양호"),
-        ("A", "Annual Earnings", "12.0", "주의"),
-        ("N", "New Product/High", "96.0", "최상"),
-        ("S", "Supply/Demand", "82.4", "양호"),
-    ]
-    
-    for i, (char, title, val, status) in enumerate(can_slim_data):
-        with c_cols[i % 4]:
-            st.markdown(f"""
-                <div class="card">
-                    <h3 style="color:#60a5fa">{char}</h3>
-                    <p style="font-size:12px; color:#94a3b8">{title}</p>
-                    <p style="font-size:24px; font-weight:bold">{val}</p>
-                    <span class="status-badge {'positive' if status=='양호' or status=='최상' else 'negative'}">{status}</span>
-                </div>
-            """, unsafe_allow_html=True)
-
-    st.divider()
-
-    # 6. 기술적/재무 상세 지표 테이블
-    col_left, col_right = st.columns(2)
-    with col_left:
-        st.subheader("🛠️ 기술적 지표 (Technical)")
-        st.table(df[['국문', '영문', '수치', '상태']].iloc[:5]) # 예시 데이터 5개
-    with col_right:
-        st.subheader("💎 재무 지표 (Fundamental)")
-        st.table(df[['국문', '영문', '수치', '상태']].iloc[5:10])
-
-else:
-    st.warning("👈 사이드바에서 분석된 엑셀 파일을 업로드해주세요.")
-    # 샘플 데이터 형식 안내
-    st.info("엑셀 필수 컬럼: [국문, 영문, 수치, 상태]")
+# 3. 결과 표시
+if search_input:
+    with st.spinner('데이터를 가져오는 중...'):
+        d = get_analysis(search_input)
+        if d:
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.subheader(f"{d['name']} 분석 결과")
+                st.metric("현재가", f"{d['price']:,.2f}")
+            with c2:
+                st.markdown(f"<div class='score-box'><h3>최종 점수</h3><h1>{d['score']}</h1></div>", unsafe_allow_html=True)
+            
+            st.divider()
+            cols = st.columns(4)
+            cols[0].metric("EPS 성장률", f"{d['eps']:.1f}%")
+            cols[1].metric("ROE", f"{d['roe']:.1f}%")
+            cols[2].metric("RS Score", f"{d['rs']:.1f}")
+            cols[3].metric("신고가 근접도", f"{d['high']:.1f}%")
+        else:
+            st.error("종목을 찾을 수 없습니다.")
