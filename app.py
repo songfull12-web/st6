@@ -2,104 +2,98 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
 
-# 1. 페이지 설정 및 다크 테마
-st.set_page_config(page_title="Global Quant Scanner", layout="wide")
+# 1. 페이지 설정
+st.set_page_config(page_title="Pro Quant Analyzer", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #0a0e14; color: #e2e8f0; }
     .stMetric { background-color: #111722; padding: 15px; border-radius: 10px; border: 1px solid #1e2d44; }
-    .status-card { background-color: #1a2233; padding: 20px; border-radius: 15px; border-left: 5px solid #00d4ff; }
+    .info-card { background-color: #161b22; padding: 20px; border-radius: 15px; border: 1px solid #30363d; margin-bottom: 20px; }
+    .buy-signal { color: #22c55e; font-weight: bold; font-size: 20px; }
+    .sell-signal { color: #ef4444; font-weight: bold; font-size: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("📊 글로벌 주도주 정밀 분석")
+# 2. 데이터 호출 함수
+def get_analysis_data(symbol):
+    target = f"{symbol}.KS" if symbol.isdigit() and len(symbol) == 6 else symbol.upper()
+    tk = yf.Ticker(target)
+    hist = tk.history(period="1y")
+    if hist.empty and ".KS" in target:
+        target = target.replace(".KS", ".KQ")
+        tk = yf.Ticker(target)
+        hist = tk.history(period="1y")
+    return tk, tk.info, hist
 
-# 2. 검색 및 데이터 로드
-symbol = st.text_input("종목 티커 또는 코드 입력 (예: NVDA, 005930)", "NVDA").strip()
-
-def get_data(ticker_str):
-    if ticker_str.isdigit() and len(ticker_str) == 6:
-        ticker_str = f"{ticker_str}.KS"
-    ticker = yf.Ticker(ticker_str)
-    
-    # 데이터가 안 불러와지면 코스닥 재시도
-    info = ticker.info
-    if 'regularMarketPrice' not in info and ticker_str.endswith('.KS'):
-        ticker_str = ticker_str.replace('.KS', '.KQ')
-        ticker = yf.Ticker(ticker_str)
-        info = ticker.info
-        
-    hist = ticker.history(period="1y")
-    return ticker, info, hist
+# 3. 사이드바 - 설정
+st.sidebar.title("🛠 분석 설정")
+symbol = st.sidebar.text_input("종목 코드", "NVDA").strip()
 
 if symbol:
-    with st.spinner('데이터를 정밀 분석 중입니다...'):
-        tk, info, hist = get_data(symbol)
+    tk, info, hist = get_analysis_data(symbol)
+    if not hist.empty:
+        price = hist['Close'].iloc[-1]
         
-        if not hist.empty:
-            # 기본 정보
-            name = info.get('shortName', symbol)
-            price = hist['Close'].iloc[-1]
-            prev_price = hist['Close'].iloc[-2]
-            change = ((price - prev_price) / prev_price) * 100
+        # --- 계산 로직 추가 ---
+        # ATR 기반 손절가 (대략적 변동성 계산)
+        atr = (hist['High'] - hist['Low']).rolling(14).mean().iloc[-1]
+        stop_loss = price - (atr * 2)
+        target_price = price + (atr * 4)
+        
+        # RSI 계산
+        delta = hist['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs)).iloc[-1]
+        
+        # --- 메인 화면 ---
+        st.title(f"🚀 {info.get('shortName', symbol)} 정밀 진단")
+        
+        # 상단 요약 섹션 (이미지의 '진입 타이밍' 느낌)
+        col_sum1, col_sum2, col_sum3 = st.columns(3)
+        with col_sum1:
+            st.markdown('<div class="info-card">', unsafe_allow_html=True)
+            st.write("🎯 **권장 가이드라인**")
+            if rsi > 70: st.markdown("<span class='sell-signal'>⚠️ 과매수 구간 (관망)</span>", unsafe_allow_html=True)
+            elif rsi < 30: st.markdown("<span class='buy-signal'>✅ 과매도 구간 (분할매수)</span>", unsafe_allow_html=True)
+            else: st.markdown("<span style='color:#eab308; font-weight:bold;'>⚖️ 추세 지속 중</span>", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-            # 상단 헤더 카드
-            st.markdown(f"""
-            <div class="status-card">
-                <h2 style='margin:0;'>{name} ({symbol})</h2>
-                <h1 style='margin:0; color:#00d4ff;'>{price:,.2f} <small style='font-size:18px; color:{"#ef4444" if change < 0 else "#22c55e"}'>{change:+.2f}%</small></h1>
-            </div>
-            """, unsafe_allow_html=True)
+        with col_sum2:
+            st.markdown('<div class="info-card">', unsafe_allow_html=True)
+            st.write("💰 **목표가 / 손절가**")
+            st.write(f"1차 익절: <span style='color:#22c55e'>{target_price:,.2f}</span>", unsafe_allow_html=True)
+            st.write(f"강제 손절: <span style='color:#ef4444'>{stop_loss:,.2f}</span>", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-            # 3. 메인 차트 (Plotly 사용)
-            st.subheader("📈 주가 추세 및 이동평균선 (EMA)")
-            hist['EMA20'] = hist['Close'].ewm(span=20, adjust=False).mean()
-            hist['EMA50'] = hist['Close'].ewm(span=50, adjust=False).mean()
-            hist['EMA200'] = hist['Close'].ewm(span=200, adjust=False).mean()
+        with col_sum3:
+            st.markdown('<div class="info-card">', unsafe_allow_html=True)
+            st.write("📊 **기술적 확신도**")
+            score = 0
+            if price > hist['Close'].rolling(200).mean().iloc[-1]: score += 40
+            if rsi < 60: score += 30
+            if info.get('earningsQuarterlyGrowth', 0) > 0.2: score += 30
+            st.write(f"종합 점수: **{score}점**")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'], name='Close', line=dict(color='#e2e8f0', width=2)))
-            fig.add_trace(go.Scatter(x=hist.index, y=hist['EMA20'], name='EMA20', line=dict(color='#00d4ff', width=1)))
-            fig.add_trace(go.Scatter(x=hist.index, y=hist['EMA50'], name='EMA50', line=dict(color='#eab308', width=1)))
-            fig.add_trace(go.Scatter(x=hist.index, y=hist['EMA200'], name='EMA200', line=dict(color='#a855f7', width=1)))
-            
-            fig.update_layout(template="plotly_dark", height=500, margin=dict(l=20, r=20, t=20, b=20),
-                              paper_bgcolor="#0a0e14", plot_bgcolor="#0a0e14")
-            st.plotly_chart(fig, use_container_width=True)
+        # 차트 섹션
+        st.subheader("📈 주가 및 기술적 지표")
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='Price'))
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].rolling(50).mean(), name='50 MA', line=dict(color='yellow', width=1)))
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['Close'].rolling(200).mean(), name='200 MA', line=dict(color='purple', width=1)))
+        fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
 
-            # 4. 기술 지표 및 재무 지표 (이미지 항목 반영)
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("🛠 기술 지표")
-                t_cols = st.columns(2)
-                t_cols[0].metric("RSI (14)", f"{info.get('rsi', 65.5):.1f}")
-                t_cols[1].metric("RS 등급", "99 (섹터 리더)")
-                
-                t_cols2 = st.columns(2)
-                t_cols2[0].metric("12M 수익률", f"{((hist['Close'].iloc[-1]/hist['Close'].iloc[0])-1)*100:+.1f}%")
-                t_cols2[1].metric("거래량 비율", f"{info.get('volume', 1)/info.get('averageVolume', 1):.2f}x")
+        # 재무 섹션 (이미지 하단 느낌)
+        st.subheader("📋 핵심 재무/성장 지표")
+        f_col1, f_col2, f_col3, f_col4 = st.columns(4)
+        f_col1.metric("EPS 성장률", f"{info.get('earningsQuarterlyGrowth', 0)*100:+.1f}%")
+        f_col2.metric("ROE", f"{info.get('returnOnEquity', 0)*100:.1f}%")
+        f_col3.metric("매출 성장률", f"{info.get('revenueGrowth', 0)*100:+.1f}%")
+        f_col4.metric("시가총액", f"{info.get('marketCap', 0)/1e12:.1f}T")
 
-            with col2:
-                st.subheader("💰 재무 지표")
-                f_cols = st.columns(2)
-                f_cols[0].metric("ROE", f"{info.get('returnOnEquity', 0)*100:.1f}%")
-                f_cols[1].metric("EPS 성장률", f"{info.get('earningsQuarterlyGrowth', 0)*100:+.1f}%")
-                
-                f_cols2 = st.columns(2)
-                f_cols2[0].metric("영업이익률", f"{info.get('operatingMargins', 0)*100:.1f}%")
-                f_cols2[1].metric("부채비율", f"{info.get('debtToEquity', 0):.1f}%")
-
-            # 5. CANSLIM 요약 분석
-            st.divider()
-            st.subheader("✅ CANSLIM 원칙 체크")
-            c_cols = st.columns(4)
-            c_cols[0].write("**C (Current Earnings)**: " + ("✅ 통과" if info.get('earningsQuarterlyGrowth', 0) > 0.2 else "❌ 미달"))
-            c_cols[1].write("**A (Annual Earnings)**: " + ("✅ 통과" if info.get('returnOnEquity', 0) > 0.15 else "❌ 미달"))
-            c_cols[2].write("**N (New Product/High)**: " + ("✅ 신고가권" if (price/hist['High'].max()) > 0.9 else "⚠️ 관망"))
-            c_cols[3].write("**L (Leader/Laggard)**: ✅ 섹터 주도주")
-
-        else:
-            st.error("데이터를 불러올 수 없습니다. 티커를 다시 확인해 주세요.")
+    else:
+        st.error("데이터를 찾을 수 없습니다.")
